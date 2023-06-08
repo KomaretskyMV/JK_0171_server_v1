@@ -7,14 +7,14 @@ import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
 import com.google.firebase.messaging.ktx.messaging
 
-class App: Application() {
+class App : Application() {
 
     lateinit var firestoreDb: FirebaseFirestore
 
-        override fun onCreate() {
+    override fun onCreate() {
         super.onCreate()
         Firebase.analytics
-        Firebase.messaging
+//        Firebase.messaging
         firestoreDb = Firebase.firestore
     }
 }
