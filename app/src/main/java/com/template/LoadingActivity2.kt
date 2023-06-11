@@ -17,23 +17,19 @@ import androidx.browser.customtabs.CustomTabColorSchemeParams
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.google.android.gms.tasks.Task
 import com.google.firebase.firestore.DocumentSnapshot
-import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.TimeZone
 import java.util.UUID
 
-class LoadingActivity : AppCompatActivity() {
+class LoadingActivity2 : AppCompatActivity() {
 
     @RequiresApi(Build.VERSION_CODES.M)
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { isGranted: Boolean ->
         if (isGranted) {
-            startFirestoreCheck()
-        } else {
             startFirestoreCheck()
         }
     }
@@ -50,15 +46,16 @@ class LoadingActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_loading)
 
-//        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        checkNotificationPermission()
-//        } else {
-//            startFirestoreCheck()
-//        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            checkNotificationPermission()
+        } else {
+            startFirestoreCheck()
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.M)
     private fun startFirestoreCheck() {
+
         val isNetworkActive =
             (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
                 .activeNetwork
@@ -69,48 +66,53 @@ class LoadingActivity : AppCompatActivity() {
         }
 
         wasFirestoreUrlNullOrEmpty =
-            sharedPreferences.getBoolean(WAS_FIRESTORE_URL_NULL_OR_EMPTY, false)
+            !sharedPreferences.getBoolean(WAS_FIRESTORE_URL_NULL_OR_EMPTY, false)
+        val document: DocumentSnapshot
 
         if (wasFirestoreUrlNullOrEmpty) {
+            preferencesEdit(
+                sharedPreferences,
+                WAS_FIRESTORE_URL_NULL_OR_EMPTY,
+                wasFirestoreUrlNullOrEmpty
+            )
+            document = (application as App).firestoreDb
+                .collection("database")
+                .document("check")
+                .get().result
+        } else {
+            preferencesEdit(
+                sharedPreferences,
+                WAS_FIRESTORE_URL_NULL_OR_EMPTY,
+                wasFirestoreUrlNullOrEmpty
+            )
             startActivity(Intent(this, MainActivity::class.java))
             return
         }
 
-        if (sharedPreferences.contains(URL)) {
+        isFinalUrlExist = sharedPreferences.getBoolean(IS_FINAL_URL_EXIST, false)
+
+        if (isFinalUrlExist) {
+            preferencesEdit(
+                sharedPreferences,
+                IS_FINAL_URL_EXIST,
+                isFinalUrlExist
+            )
             val url = sharedPreferences.getString(URL, "")
             startChromeCustomTabs(url!!)
             return
         } else {
-            readDataFromFirestore((application as App).firestoreDb)
-        }
-    }
-
-    private fun readDataFromFirestore(firestoreDb: FirebaseFirestore) {
-        firestoreDb
-            .collection("database")
-            .document("check")
-            .get()
-            .addOnSuccessListener { document ->
-//                isFinalUrlExist = sharedPreferences.getBoolean(IS_FINAL_URL_EXIST, false)
-
-//                if (isFinalUrlExist) {
-//                    val url = sharedPreferences.getString(URL, "")
-//                    startChromeCustomTabs(url!!)
-//                } else {
-                    if (document == null) {
-                        wasFirestoreUrlNullOrEmpty = true
-                        preferencesEdit(
-                            sharedPreferences,
-                            WAS_FIRESTORE_URL_NULL_OR_EMPTY,
-                            wasFirestoreUrlNullOrEmpty
-                        )
-                        startActivity(Intent(this, MainActivity::class.java))
-                    } else {
-                        val domenFromFirebase = document.get("link").toString()
-                        startByUrl(domenFromFirebase)
-                    }
-//                }
+            preferencesEdit(
+                sharedPreferences,
+                IS_FINAL_URL_EXIST,
+                isFinalUrlExist
+            )
+            if (document != null) {
+                val link = document.get("link").toString()
+                startByUrl(link)
             }
+        }
+
+
     }
 
     private fun startByUrl(domenFromFirebase: String) {
@@ -144,7 +146,7 @@ class LoadingActivity : AppCompatActivity() {
                     WAS_FIRESTORE_URL_NULL_OR_EMPTY,
                     wasFirestoreUrlNullOrEmpty
                 )
-                startActivity(Intent(this@LoadingActivity, MainActivity::class.java))
+                startActivity(Intent(this@LoadingActivity2, MainActivity::class.java))
             }
         }
     }
@@ -158,7 +160,7 @@ class LoadingActivity : AppCompatActivity() {
                     ).build()
             ).build()
         customTabsIntent.launchUrl(this, Uri.parse(url))
-        LoadingActivity().finish()
+        LoadingActivity2().finish()
     }
 
     private fun preferencesEdit(
@@ -177,10 +179,8 @@ class LoadingActivity : AppCompatActivity() {
             if (ContextCompat.checkSelfPermission(
                     this,
                     Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED
+                ) != PackageManager.PERMISSION_GRANTED
             ) {
-                startFirestoreCheck()
-            } else {
                 requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
